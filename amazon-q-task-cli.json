@@ -1,0 +1,35 @@
+{
+  "family": "amazon-q-task-cli",
+  "executionRoleArn": "arn:aws:iam::318766877259:role/ecsTaskExecutionRole",
+  "taskRoleArn": "arn:aws:iam::318766877259:role/AmazonQTaskRole",
+  "networkMode": "awsvpc",
+  "containerDefinitions": [
+    {
+      "name": "amazon-q-container",
+      "image": "318766877259.dkr.ecr.us-east-1.amazonaws.com/amazon-q-dev-cli:latest",
+      "essential": true,
+      "environment": [
+        { "name": "PROCESS_REQUIREMENTS", "value": "true" },
+        { "name": "LOGIN_SNS_TOPIC", "value": "arn:aws:sns:us-east-1:318766877259:q-dev-cli-login" },
+        { "name": "REPO_URL", "value": "https://github.com/akadesilva/q-headless-demo1" },
+        { "name": "INSTRUCTIONS_S3_URI", "value": "s3://amazon-q-demo-1750460691/q-headless/dummy_instructions.md" },
+        { "name": "BRANCH_NAME", "value": "main" },
+        { "name": "Q_DATABASE_S3_URI", "value": "s3://amazon-q-demo-1750460691/q-headless/database/data.sqlite3" },
+        { "name": "GIT_CREDENTIALS_SECRET_ID", "value": "amazon-q-headless/git-credentials" },
+        { "name": "AMAZON_Q_CREDENTIALS_SECRET_ID", "value": "amazon-q-headless/amazon-q-credentials" }
+      ],
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/amazon-q-task-cli",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "ecs",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ],
+  "requiresCompatibilities": ["FARGATE"],
+  "cpu": "2048",
+  "memory": "8192"
+}
