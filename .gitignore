@@ -40,3 +40,6 @@ venv/
 ENV/
 env.bak/
 venv.bak/
+# Project-specific files
+dummy_instructions/
+amazon-q-task-cli.json

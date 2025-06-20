@@ -1,1 +1,0 @@
-Update the login page by looking at the instructions in RED in the login_page_update.png

@@ -400,13 +400,53 @@ The container requires two secrets to be set up in AWS Secrets Manager:
 
 You can create these secrets using the provided `setup-secrets.sh` script or manually through the AWS Management Console or AWS CLI.
 
+## Architecture
+
+The Amazon Q Developer CLI Container follows this architecture:
+
+![Architecture Diagram](architecture.png)
+
+### Flow Overview:
+
+1. **Initialization**:
+   - Instructions are copied to S3
+   - Container is started in ECS
+
+2. **Authentication Flow**:
+   - Container loads the Q Developer CLI database from S3 (if it exists)
+   - Container fetches Amazon Q credentials from Secrets Manager
+   - Container requests authentication URL and code from Q Developer backend
+   - Authentication URL and code are sent to the SNS topic
+   - User receives email with authentication URL and code
+   - User authenticates with their Amazon Q Developer Pro subscription
+   - Authentication status is saved in the Q CLI database
+   - Database is uploaded to S3 for persistence
+
+3. **Processing Flow**:
+   - Container fetches Git credentials from Secrets Manager
+   - Container clones the target repository
+   - Container fetches instructions from S3
+   - Container processes requirements using Amazon Q Developer CLI
+   - Container commits and pushes changes to the repository
+   - Database is uploaded to S3 for persistence
+
 ## Authentication Process
 
-When the container runs for the first time:
+The container uses Amazon SNS to facilitate the authentication process:
 
-1. It will output an authentication URL and code to the container logs
-2. A developer must visit the URL and enter the code
-3. After authentication is complete, run the container again to process requirements
+1. **First Run**:
+   - Container attempts to authenticate with Amazon Q Developer CLI
+   - Authentication URL and code are sent to the SNS topic specified in `LOGIN_SNS_TOPIC`
+   - Users subscribed to this SNS topic receive an email with the authentication URL and code
+   - The user must visit the URL and enter the code to authenticate with their Amazon Q Developer Pro subscription
+   - After successful authentication, credentials are stored in the Q CLI database
+
+2. **Subsequent Runs**:
+   - Container checks if valid credentials exist in the database
+   - If credentials are valid, it proceeds with processing requirements
+   - If credentials have expired, the authentication process is repeated
+
+Authentication only needs to be performed when the credentials in the database expire. The database is persisted between container runs using the S3 location specified in `Q_DATABASE_S3_URI`.
 
 ## Requirements Format
 
@@ -421,7 +461,6 @@ The requirements document should be a Markdown file with sections marked by head
 ```
 
 The container will extract the section between `Feature Requirements` and `End Requirements` markers.
-
 ## Troubleshooting
 
 ### Authentication Issues
@@ -430,6 +469,7 @@ If you encounter authentication issues:
 - Check that the authentication URL and code were correctly entered
 - Check the task logs for any error messages
 - Verify that the Amazon Q credentials secret contains the correct SSO URL and region
+- Ensure you've subscribed to the SNS topic to receive authentication emails
 
 ### Task Failures
 
