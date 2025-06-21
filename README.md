@@ -81,17 +81,22 @@ Authentication only needs to be performed when the credentials in the database e
 
 ## Requirements Format
 
-The requirements document should be a Markdown file with sections marked by headers:
+The container supports two ways to provide instructions:
 
-```markdown
-## Feature Requirements
-- Implement a user authentication system
-- Add password reset functionality
-- Create user profile page
-## End Requirements
-```
+1. **Single File**: Provide an S3 URI pointing directly to an `instructions.md` file:
+   ```
+   s3://your-bucket/path/to/instructions.md
+   ```
 
-The container will extract the section between `Feature Requirements` and `End Requirements` markers.
+2. **Directory with Multiple Files**: Provide an S3 prefix containing multiple files:
+   ```
+   s3://your-bucket/path/to/requirements/
+   ```
+   This directory should contain:
+   - An `instructions.md` file with the main requirements
+   - Optional supporting files such as wireframes, diagrams, or other reference materials
+
+There is no specific structure required for the `instructions.md` file itself. You can format your requirements in any way that clearly communicates what needs to be implemented.
 
 ## Environment Variables
 
