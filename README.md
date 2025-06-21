@@ -10,6 +10,36 @@ The container uses Amazon Q Developer CLI to:
 3. Generate code implementations using Amazon Q
 4. Commit and push changes to a new branch
 
+## Architecture
+
+The Amazon Q Developer CLI Container follows this architecture:
+
+![Architecture Diagram](architecture.png)
+
+### Flow Overview
+
+1. **Initialization**:
+   - Instructions are copied to S3
+   - Container is started in ECS
+
+2. **Authentication Flow**:
+   - Container loads the Q Developer CLI database from S3 (if it exists)
+   - Container fetches Amazon Q credentials from Secrets Manager
+   - Container requests authentication URL and code from Q Developer backend
+   - Authentication URL and code are sent to the SNS topic
+   - User receives email with authentication URL and code
+   - User authenticates with their Amazon Q Developer Pro subscription
+   - Authentication status is saved in the Q CLI database
+   - Database is uploaded to S3 for persistence
+
+3. **Processing Flow**:
+   - Container fetches Git credentials from Secrets Manager
+   - Container clones the target repository
+   - Container fetches instructions from S3
+   - Container processes requirements using Amazon Q Developer CLI
+   - Container commits and pushes changes to the repository
+   - Database is uploaded to S3 for persistence
+
 ## Project Structure
 
 ```
@@ -31,36 +61,71 @@ q-headless/
     └── entrypoint.sh     # Container entrypoint
 ```
 
-## How It Works
+## Authentication Process
 
-### Authentication Flow
-
-The container uses a two-phase authentication approach:
+The container uses Amazon SNS to facilitate the authentication process:
 
 1. **First Run**:
    - Container attempts to authenticate with Amazon Q Developer CLI
-   - Authentication URL and code are output to the container logs
-   - User must complete authentication by visiting the URL and entering the code
+   - Authentication URL and code are sent to the SNS topic specified in `LOGIN_SNS_TOPIC`
+   - Users subscribed to this SNS topic receive an email with the authentication URL and code
+   - The user must visit the URL and enter the code to authenticate with their Amazon Q Developer Pro subscription
+   - After successful authentication, credentials are stored in the Q CLI database
 
-2. **Second Run**:
-   - Container checks if authentication is complete
-   - If authenticated, processes requirements and generates code
+2. **Subsequent Runs**:
+   - Container checks if valid credentials exist in the database
+   - If credentials are valid, it proceeds with processing requirements
+   - If credentials have expired, the authentication process is repeated
 
-### Source Code Access
+Authentication only needs to be performed when the credentials in the database expire. The database is persisted between container runs using the S3 location specified in `Q_DATABASE_S3_URI`.
 
-The container accesses source code by:
+## Requirements Format
 
-1. Cloning the repository specified in the REPO_URL environment variable
-2. Reading requirements from the specified document
-3. Making changes to the code based on the requirements
+The requirements document should be a Markdown file with sections marked by headers:
 
-### Database Persistence
+```markdown
+## Feature Requirements
+- Implement a user authentication system
+- Add password reset functionality
+- Create user profile page
+## End Requirements
+```
 
-The container maintains state between runs by:
+The container will extract the section between `Feature Requirements` and `End Requirements` markers.
 
-1. Downloading the Amazon Q Developer CLI database from S3 at startup (if it exists)
-2. Using the database during execution
-3. Uploading the updated database back to S3 before container shutdown
+## Environment Variables
+
+- `PROCESS_REQUIREMENTS`: Set to "true" to process requirements
+- `REPO_URL`: URL of the Git repository to clone
+- `INSTRUCTIONS_S3_URI`: S3 URI of the instructions file
+- `BRANCH_NAME`: Git branch name for implementation (default: feature/q-implementation-timestamp)
+- `COMMIT_MESSAGE`: Git commit message (default: "Implement requirements using Amazon Q Developer")
+- `LOGIN_SNS_TOPIC`: SNS topic ARN for login notifications
+- `Q_DATABASE_S3_URI`: S3 URI for storing/retrieving the Q CLI database
+- `GIT_CREDENTIALS_SECRET_ID`: Secret ID for Git credentials (default: amazon-q-headless/git-credentials)
+- `AMAZON_Q_CREDENTIALS_SECRET_ID`: Secret ID for Amazon Q credentials (default: amazon-q-headless/amazon-q-credentials)
+
+## AWS Secrets Manager Setup
+
+The container requires two secrets to be set up in AWS Secrets Manager:
+
+1. **Git Credentials Secret** (default ID: `amazon-q-headless/git-credentials`):
+   ```json
+   {
+     "token": "your-github-personal-access-token",
+     "email": "your-email@example.com"
+   }
+   ```
+
+2. **Amazon Q Credentials Secret** (default ID: `amazon-q-headless/amazon-q-credentials`):
+   ```json
+   {
+     "sso_url": "https://view.awsapps.com/start",
+     "region": "us-east-1"
+   }
+   ```
+
+You can create these secrets using the provided `setup-secrets.sh` script or manually through the AWS Management Console or AWS CLI.
 
 ## Running Locally with Docker
 
@@ -83,8 +148,6 @@ docker run -it --rm \
 
 ## Running on AWS Fargate
 
-This section provides comprehensive instructions for running the Amazon Q Developer CLI Container on AWS Fargate.
-
 ### Prerequisites
 
 - AWS CLI installed and configured with appropriate permissions
@@ -94,13 +157,13 @@ This section provides comprehensive instructions for running the Amazon Q Develo
 
 ### Automated Setup
 
-We've provided a set of scripts to automate the Fargate setup process. To use them:
+We've provided a set of scripts to automate the Fargate setup process:
 
 ```bash
 ./setup-fargate.sh
 ```
 
-This script will guide you through the entire process, including:
+This script guides you through:
 - Setting up IAM roles
 - Setting up secrets in AWS Secrets Manager
 - Building and pushing the Docker image
@@ -114,8 +177,6 @@ This script will guide you through the entire process, including:
 If you prefer to set up manually, follow these steps:
 
 #### 1. Set up IAM Roles and Policies
-
-Create the necessary IAM roles:
 
 ```bash
 # Create ECS Task Execution Role
@@ -195,10 +256,8 @@ aws iam create-policy \
     ]
   }'
 
-# Get the policy ARN
-POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='AmazonQTaskPolicy'].Arn" --output text)
-
 # Attach policy
+POLICY_ARN=$(aws iam list-policies --query "Policies[?PolicyName=='AmazonQTaskPolicy'].Arn" --output text)
 aws iam attach-role-policy \
   --role-name AmazonQTaskRole \
   --policy-arn $POLICY_ARN
@@ -214,20 +273,14 @@ AWS_REGION="us-east-1"
 # Create ECR repository
 aws ecr create-repository --repository-name amazon-q-dev-cli
 
-# Build Docker image
+# Build and push image
 docker build -t amazon-q-dev-cli .
-
-# Login to ECR
 aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
-
-# Tag and push image
 docker tag amazon-q-dev-cli:latest $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/amazon-q-dev-cli:latest
 docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/amazon-q-dev-cli:latest
 ```
 
 #### 3. Set up AWS Secrets Manager
-
-Create the required secrets in AWS Secrets Manager:
 
 ```bash
 # Create Git credentials secret
@@ -252,23 +305,25 @@ aws secretsmanager create-secret \
 #### 4. Set up S3 Bucket and SNS Topic
 
 ```bash
-# Create S3 bucket
+# Create S3 bucket and SNS topic
 BUCKET_NAME="amazon-q-demo-$(date +%s)"
 aws s3 mb s3://$BUCKET_NAME
+SNS_TOPIC_ARN=$(aws sns create-topic --name q-dev-cli-login --query 'TopicArn' --output text)
 
-# Create sample instructions file
+# Subscribe your email to the SNS topic
+aws sns subscribe \
+  --topic-arn $SNS_TOPIC_ARN \
+  --protocol email \
+  --notification-endpoint your-email@example.com
+
+# Create and upload sample instructions
 cat > dummy_instructions.md << 'EOF'
 ## Feature Requirements
 - Create a simple REST API endpoint that returns the current time
 - Add a health check endpoint that returns system status
 ## End Requirements
 EOF
-
-# Upload instructions to S3
 aws s3 cp dummy_instructions.md s3://$BUCKET_NAME/q-headless/dummy_instructions.md
-
-# Create SNS topic for login notifications
-SNS_TOPIC_ARN=$(aws sns create-topic --name q-dev-cli-login --query 'TopicArn' --output text)
 ```
 
 #### 5. Create ECS Cluster and Task Definition
@@ -277,7 +332,7 @@ SNS_TOPIC_ARN=$(aws sns create-topic --name q-dev-cli-login --query 'TopicArn' -
 # Create ECS cluster
 aws ecs create-cluster --cluster-name amazon-q-cluster
 
-# Create task definition JSON
+# Create task definition
 cat > amazon-q-task-cli.json << EOF
 {
   "family": "amazon-q-task-cli",
@@ -316,18 +371,15 @@ cat > amazon-q-task-cli.json << EOF
 }
 EOF
 
-# Register task definition
 aws ecs register-task-definition --cli-input-json file://amazon-q-task-cli.json
 ```
 
-#### 6. Run the Task in Fargate
+#### 6. Run the Task and Complete Authentication
 
 ```bash
-# You need to provide your subnet ID and security group ID
+# Run the task
 SUBNET_ID="your-subnet-id"
 SECURITY_GROUP_ID="your-security-group-id"
-
-# Run the task
 TASK_ARN=$(aws ecs run-task \
   --cluster amazon-q-cluster \
   --task-definition amazon-q-task-cli \
@@ -335,30 +387,16 @@ TASK_ARN=$(aws ecs run-task \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SECURITY_GROUP_ID],assignPublicIp=ENABLED}" \
   --query 'tasks[0].taskArn' \
   --output text)
-
-# Extract task ID from ARN
 TASK_ID=$(echo $TASK_ARN | awk -F'/' '{print $3}')
-```
 
-#### 7. Complete Authentication
-
-```bash
-# Wait for task to start running
+# Wait for task to start and check logs for authentication URL
 aws ecs wait tasks-running --cluster amazon-q-cluster --tasks $TASK_ARN
-
-# Get logs to find authentication URL and code
 aws logs get-log-events \
   --log-group-name /ecs/amazon-q-task-cli \
   --log-stream-name ecs/amazon-q-container/$TASK_ID \
   --output text
 
-# After completing authentication via the URL and code in the logs, run the task again
-```
-
-#### 8. Run the Task Again to Process Requirements
-
-```bash
-# Run the task again
+# After completing authentication via the URL and code in the email, run the task again
 aws ecs run-task \
   --cluster amazon-q-cluster \
   --task-definition amazon-q-task-cli \
@@ -366,121 +404,21 @@ aws ecs run-task \
   --network-configuration "awsvpcConfiguration={subnets=[$SUBNET_ID],securityGroups=[$SECURITY_GROUP_ID],assignPublicIp=ENABLED}"
 ```
 
-## Environment Variables
-
-- `PROCESS_REQUIREMENTS`: Set to "true" to process requirements
-- `REPO_URL`: URL of the Git repository to clone
-- `INSTRUCTIONS_S3_URI`: S3 URI of the instructions file
-- `BRANCH_NAME`: Git branch name for implementation
-- `COMMIT_MESSAGE`: Git commit message
-- `LOGIN_SNS_TOPIC`: SNS topic ARN for login notifications
-- `Q_DATABASE_S3_URI`: S3 URI for storing/retrieving the Q CLI database
-- `GIT_CREDENTIALS_SECRET_ID`: Secret ID for Git credentials in AWS Secrets Manager
-- `AMAZON_Q_CREDENTIALS_SECRET_ID`: Secret ID for Amazon Q credentials in AWS Secrets Manager
-
-## AWS Secrets Manager Setup
-
-The container requires two secrets to be set up in AWS Secrets Manager:
-
-1. **Git Credentials Secret** (default ID: `amazon-q-headless/git-credentials`):
-   ```json
-   {
-     "token": "your-github-personal-access-token",
-     "email": "your-email@example.com"
-   }
-   ```
-
-2. **Amazon Q Credentials Secret** (default ID: `amazon-q-headless/amazon-q-credentials`):
-   ```json
-   {
-     "sso_url": "https://view.awsapps.com/start",
-     "region": "us-east-1"
-   }
-   ```
-
-You can create these secrets using the provided `setup-secrets.sh` script or manually through the AWS Management Console or AWS CLI.
-
-## Architecture
-
-The Amazon Q Developer CLI Container follows this architecture:
-
-![Architecture Diagram](architecture.png)
-
-### Flow Overview:
-
-1. **Initialization**:
-   - Instructions are copied to S3
-   - Container is started in ECS
-
-2. **Authentication Flow**:
-   - Container loads the Q Developer CLI database from S3 (if it exists)
-   - Container fetches Amazon Q credentials from Secrets Manager
-   - Container requests authentication URL and code from Q Developer backend
-   - Authentication URL and code are sent to the SNS topic
-   - User receives email with authentication URL and code
-   - User authenticates with their Amazon Q Developer Pro subscription
-   - Authentication status is saved in the Q CLI database
-   - Database is uploaded to S3 for persistence
-
-3. **Processing Flow**:
-   - Container fetches Git credentials from Secrets Manager
-   - Container clones the target repository
-   - Container fetches instructions from S3
-   - Container processes requirements using Amazon Q Developer CLI
-   - Container commits and pushes changes to the repository
-   - Database is uploaded to S3 for persistence
-
-## Authentication Process
-
-The container uses Amazon SNS to facilitate the authentication process:
-
-1. **First Run**:
-   - Container attempts to authenticate with Amazon Q Developer CLI
-   - Authentication URL and code are sent to the SNS topic specified in `LOGIN_SNS_TOPIC`
-   - Users subscribed to this SNS topic receive an email with the authentication URL and code
-   - The user must visit the URL and enter the code to authenticate with their Amazon Q Developer Pro subscription
-   - After successful authentication, credentials are stored in the Q CLI database
-
-2. **Subsequent Runs**:
-   - Container checks if valid credentials exist in the database
-   - If credentials are valid, it proceeds with processing requirements
-   - If credentials have expired, the authentication process is repeated
-
-Authentication only needs to be performed when the credentials in the database expire. The database is persisted between container runs using the S3 location specified in `Q_DATABASE_S3_URI`.
-
-## Requirements Format
-
-The requirements document should be a Markdown file with sections marked by headers:
-
-```markdown
-## Feature Requirements
-- Implement a user authentication system
-- Add password reset functionality
-- Create user profile page
-## End Requirements
-```
-
-The container will extract the section between `Feature Requirements` and `End Requirements` markers.
 ## Troubleshooting
 
 ### Authentication Issues
-
-If you encounter authentication issues:
-- Check that the authentication URL and code were correctly entered
+- Check that you've subscribed to the SNS topic with your email
+- Verify you received the authentication email with URL and code
+- Ensure you completed authentication with your Amazon Q Developer Pro subscription
 - Check the task logs for any error messages
 - Verify that the Amazon Q credentials secret contains the correct SSO URL and region
-- Ensure you've subscribed to the SNS topic to receive authentication emails
 
 ### Task Failures
-
-If the task fails:
 - Check the CloudWatch logs for error messages
 - Verify that the IAM roles have the necessary permissions
 - Ensure the S3 bucket and objects are accessible
 
 ### Network Issues
-
-If the task cannot access the internet:
 - Verify that the subnet has a route to an Internet Gateway
 - Check that the security group allows outbound traffic
 - Ensure that public IP assignment is enabled for the task
