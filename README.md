@@ -69,7 +69,7 @@ The container uses Amazon SNS to facilitate the authentication process:
    - Container attempts to authenticate with Amazon Q Developer CLI
    - Authentication URL and code are sent to the SNS topic specified in `LOGIN_SNS_TOPIC`
    - Users subscribed to this SNS topic receive an email with the authentication URL and code
-   - The user must visit the URL and enter the code to authenticate with their Amazon Q Developer Pro subscription
+   - The user must visit the URL and authenticate with their Amazon Q Developer Pro subscription
    - After successful authentication, credentials are stored in the Q CLI database
 
 2. **Subsequent Runs**:
@@ -125,7 +125,7 @@ The container requires two secrets to be set up in AWS Secrets Manager:
 2. **Amazon Q Credentials Secret** (default ID: `amazon-q-headless/amazon-q-credentials`):
    ```json
    {
-     "sso_url": "https://view.awsapps.com/start",
+     "sso_url": "https://d-xxxxxxxxxx.awsapps.com/start",
      "region": "us-east-1"
    }
    ```
